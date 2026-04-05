@@ -1,0 +1,12 @@
+version: "3.8"
+services:
+  fleet:
+    build: .
+    ports:
+      - "9809:9809"
+    volumes:
+      - fleet_data:/data
+    environment:
+      - PORT=9809
+volumes:
+  fleet_data:
