@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -43,6 +44,9 @@ func New(db *store.DB, limits Limits, dataDir string) *Server {
 	s.mux.HandleFunc("GET /", s.root)
 	s.mux.HandleFunc("GET /api/tier", s.tierHandler)
 	s.mux.HandleFunc("GET /api/config", s.configHandler)
+	s.mux.HandleFunc("GET /api/extras/{resource}", s.listExtras)
+	s.mux.HandleFunc("GET /api/extras/{resource}/{id}", s.getExtras)
+	s.mux.HandleFunc("PUT /api/extras/{resource}/{id}", s.putExtras)
 	return s
 }
 
@@ -95,7 +99,7 @@ func (s *Server) updateVehicles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) delVehicles(w http.ResponseWriter, r *http.Request) {
-	s.db.DeleteVehicles(r.PathValue("id"))
+	id := r.PathValue("id"); s.db.DeleteVehicles(id); s.db.DeleteExtras("vehicles", id)
 	wj(w, 200, map[string]string{"deleted": "ok"})
 }
 
@@ -150,7 +154,7 @@ func (s *Server) updateMaintenance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) delMaintenance(w http.ResponseWriter, r *http.Request) {
-	s.db.DeleteMaintenance(r.PathValue("id"))
+	id := r.PathValue("id"); s.db.DeleteMaintenance(id); s.db.DeleteExtras("maintenance", id)
 	wj(w, 200, map[string]string{"deleted": "ok"})
 }
 
@@ -203,4 +207,45 @@ func (s *Server) configHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.pCfg)
+}
+
+// listExtras returns all extras for a resource type as {record_id: {...fields...}}
+func (s *Server) listExtras(w http.ResponseWriter, r *http.Request) {
+	resource := r.PathValue("resource")
+	all := s.db.AllExtras(resource)
+	out := make(map[string]json.RawMessage, len(all))
+	for id, data := range all {
+		out[id] = json.RawMessage(data)
+	}
+	wj(w, 200, out)
+}
+
+// getExtras returns the extras blob for a single record.
+func (s *Server) getExtras(w http.ResponseWriter, r *http.Request) {
+	resource := r.PathValue("resource")
+	id := r.PathValue("id")
+	data := s.db.GetExtras(resource, id)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(data))
+}
+
+// putExtras stores the extras blob for a single record.
+func (s *Server) putExtras(w http.ResponseWriter, r *http.Request) {
+	resource := r.PathValue("resource")
+	id := r.PathValue("id")
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		we(w, 400, "read body")
+		return
+	}
+	var probe map[string]any
+	if err := json.Unmarshal(body, &probe); err != nil {
+		we(w, 400, "invalid json")
+		return
+	}
+	if err := s.db.SetExtras(resource, id, string(body)); err != nil {
+		we(w, 500, "save failed")
+		return
+	}
+	wj(w, 200, map[string]string{"ok": "saved"})
 }
